@@ -22,6 +22,7 @@ export type WorkflowEventKind =
   | "claimed"
   | "run_started"
   | "run_completed"
+  | "run_failed"
   | "transcript"
   | "transitioned";
 

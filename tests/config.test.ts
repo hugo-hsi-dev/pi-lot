@@ -55,7 +55,9 @@ describe("validateConfig", () => {
     const cfg = validateConfig(raw, { cwd: "/tmp" });
     expect(cfg.board.owner).toBe("octocat");
     // The field is not exposed on BoardConfig anymore.
-    expect((cfg.board as Record<string, unknown>).statusValues).toBeUndefined();
+    expect(
+      (cfg.board as unknown as Record<string, unknown>).statusValues,
+    ).toBeUndefined();
   });
 
   test("defaults workflowDir to <cwd>/.workflow when omitted", () => {

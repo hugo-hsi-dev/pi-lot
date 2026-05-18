@@ -21,6 +21,12 @@ export interface Candidate {
   status: string;
   /** GitHub Issue createdAt (ISO-8601). */
   createdAt: string;
+  /**
+   * GitHub Project item id (PVTI_...). The Orchestrator passes this
+   * through to {@link BoardTransitionService.applyTransition} when
+   * moving the Board to the Task Definition's `next` status.
+   */
+  projectItemId: string;
 }
 
 /**
@@ -128,6 +134,7 @@ export class MultiQueueBoardGateway {
       url,
       status,
       createdAt,
+      projectItemId: itemId,
     };
   }
 
