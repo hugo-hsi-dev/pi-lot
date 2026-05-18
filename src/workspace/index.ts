@@ -21,3 +21,5 @@ export type {
 } from "./git-runner.ts";
 export { SubprocessGitRunner } from "./subprocess-git-runner.ts";
 export { normalizeRemoteUrl } from "./remote-url.ts";
+export { defaultWorktreeCleanup } from "./cleanup.ts";
+export type { WorktreeCleanup } from "./cleanup.ts";
