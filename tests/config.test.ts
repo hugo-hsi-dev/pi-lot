@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   ConfigError,
@@ -14,14 +14,6 @@ function makeValidConfig() {
       owner: "octocat",
       projectNumber: 7,
       statusField: "Status",
-      statusValues: {
-        queued: "Queued",
-        implementing: "Implementing",
-        reviewing: "Reviewing",
-        finalizing: "Finalizing",
-        readyForReview: "Ready for Review",
-        needsHuman: "Needs Human",
-      },
     },
     projectsDir: "/tmp/projects",
     stateDir: "/tmp/pi-lot-state",
@@ -36,12 +28,59 @@ describe("validateConfig", () => {
     expect(cfg.board.owner).toBe("octocat");
     expect(cfg.board.projectNumber).toBe(7);
     expect(cfg.board.statusField).toBe("Status");
-    expect(cfg.board.statusValues.queued).toBe("Queued");
-    expect(cfg.board.statusValues.needsHuman).toBe("Needs Human");
     expect(cfg.projectsDir).toBe("/tmp/projects");
     expect(cfg.stateDir).toBe("/tmp/pi-lot-state");
     expect(cfg.pollIntervalMs).toBe(15000);
     expect(cfg.concurrency).toBe(3);
+  });
+
+  test("accepts a config without board.statusValues (no longer required)", () => {
+    const raw = makeValidConfig();
+    // Already absent in the new shape; this test pins the behavior.
+    expect("statusValues" in raw.board).toBe(false);
+    const cfg = validateConfig(raw, { cwd: "/tmp" });
+    expect(cfg.board.owner).toBe("octocat");
+  });
+
+  test("silently ignores legacy board.statusValues field for forward-compatibility", () => {
+    const raw = makeValidConfig() as Record<string, unknown>;
+    (raw.board as Record<string, unknown>).statusValues = {
+      queued: "Queued",
+      implementing: "Implementing",
+      reviewing: "Reviewing",
+      finalizing: "Finalizing",
+      readyForReview: "Ready for Review",
+      needsHuman: "Needs Human",
+    };
+    const cfg = validateConfig(raw, { cwd: "/tmp" });
+    expect(cfg.board.owner).toBe("octocat");
+    // The field is not exposed on BoardConfig anymore.
+    expect((cfg.board as Record<string, unknown>).statusValues).toBeUndefined();
+  });
+
+  test("defaults workflowDir to <cwd>/.workflow when omitted", () => {
+    const cfg = validateConfig(makeValidConfig(), { cwd: "/var/app" });
+    expect(cfg.workflowDir).toBe("/var/app/.workflow");
+  });
+
+  test("honors an explicit workflowDir resolved against cwd", () => {
+    const raw = makeValidConfig() as Record<string, unknown>;
+    raw.workflowDir = "custom/workflows";
+    const cfg = validateConfig(raw, { cwd: "/home/me" });
+    expect(cfg.workflowDir).toBe("/home/me/custom/workflows");
+  });
+
+  test("expands ~ in workflowDir", () => {
+    const raw = makeValidConfig() as Record<string, unknown>;
+    raw.workflowDir = "~/my-workflows";
+    const cfg = validateConfig(raw, { cwd: "/tmp" });
+    expect(cfg.workflowDir).toBe(resolve(homedir(), "my-workflows"));
+  });
+
+  test("rejects empty-string workflowDir when provided", () => {
+    const raw = makeValidConfig() as Record<string, unknown>;
+    raw.workflowDir = "";
+    expect(() => validateConfig(raw, { cwd: "/tmp" })).toThrow(ConfigError);
   });
 
   test("defaults pollIntervalMs and concurrency when omitted", () => {
@@ -117,26 +156,6 @@ describe("validateConfig", () => {
     expect(() => validateConfig(raw2, { cwd: "/tmp" })).toThrow(ConfigError);
   });
 
-  test("rejects missing status map keys", () => {
-    const raw = makeValidConfig();
-    delete (raw.board.statusValues as Record<string, unknown>).needsHuman;
-    try {
-      validateConfig(raw, { cwd: "/tmp" });
-      expect(false).toBe(true);
-    } catch (e) {
-      expect(e).toBeInstanceOf(ConfigError);
-      expect((e as ConfigError).issues.join("\n")).toContain(
-        "board.statusValues.needsHuman",
-      );
-    }
-  });
-
-  test("rejects non-string status map values", () => {
-    const raw = makeValidConfig();
-    (raw.board.statusValues as Record<string, unknown>).queued = 1;
-    expect(() => validateConfig(raw, { cwd: "/tmp" })).toThrow(ConfigError);
-  });
-
   test("rejects non-integer / non-positive pollIntervalMs and concurrency", () => {
     const raw = makeValidConfig();
     raw.pollIntervalMs = 0;
@@ -149,7 +168,7 @@ describe("validateConfig", () => {
 
   test("collects multiple issues into a single ConfigError", () => {
     const raw = {
-      board: { owner: "", projectNumber: 0, statusField: "", statusValues: {} },
+      board: { owner: "", projectNumber: 0, statusField: "" },
       projectsDir: "",
     };
     try {
@@ -193,5 +212,18 @@ describe("loadConfig", () => {
     );
     const cfg = await loadConfig({ cwd: dir });
     expect(cfg.projectsDir).toBe(resolve("/tmp/projects"));
+  });
+
+  test("does NOT search parent directories for the config file", async () => {
+    const parent = mkdtempSync(join(tmpdir(), "pilot-cfg-parent-"));
+    writeFileSync(
+      join(parent, ".pi-lot.config.json"),
+      JSON.stringify(makeValidConfig()),
+    );
+    const child = join(parent, "nested");
+    mkdirSync(child);
+    await expect(loadConfig({ cwd: child })).rejects.toBeInstanceOf(
+      ConfigError,
+    );
   });
 });
