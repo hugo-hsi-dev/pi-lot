@@ -7,3 +7,9 @@ export type {
   ApplyRunOutcomeInput,
   ConductedRunDeps,
 } from "./needs-human.ts";
+export { assemblePiLotRuntime } from "./runtime.ts";
+export type {
+  AssembleRuntimeInput,
+  ExpectedRemoteForFn,
+  PiLotRuntime,
+} from "./runtime.ts";
