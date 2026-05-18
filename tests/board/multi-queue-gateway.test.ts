@@ -98,7 +98,8 @@ function prItem(opts: { itemId: string; status?: string }) {
 function graphqlResponse(items: unknown[]): string {
   return JSON.stringify({
     data: {
-      organization: {
+      repositoryOwner: {
+        __typename: "User",
         projectV2: {
           id: "PVT_kwDOA",
           items: { nodes: items },
@@ -151,6 +152,10 @@ describe("MultiQueueBoardGateway.pollEligibleCandidates", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]![0]).toBe("api");
     expect(calls[0]![1]).toBe("graphql");
+    const queryArg = calls[0]!.find((arg) => arg.startsWith("query="));
+    expect(queryArg).toContain("repositoryOwner(login: $owner)");
+    expect(queryArg).not.toContain("$statusField");
+    expect(calls[0]).not.toContain("statusField=Status");
     expect(candidates).toHaveLength(1);
     expect(candidates[0]!.issueNumber).toBe(1);
   });

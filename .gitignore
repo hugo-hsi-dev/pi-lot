@@ -1,5 +1,6 @@
 node_modules
 .DS_Store
 .env
+.pi-lot.config.json
 dist
 .pi-lot-state

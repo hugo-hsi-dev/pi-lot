@@ -56,8 +56,6 @@ export class MultiQueueBoardGateway {
       `owner=${this.board.owner}`,
       "-F",
       `projectNumber=${this.board.projectNumber}`,
-      "-F",
-      `statusField=${this.board.statusField}`,
       "-f",
       `query=${PROJECT_QUERY}`,
     ];
@@ -175,14 +173,11 @@ export class MultiQueueBoardGateway {
     if (!isObject(data)) {
       throw new BoardError("malformed", "Board response missing data");
     }
-    const ownerNode =
-      (isObject(data["organization"]) && data["organization"]) ||
-      (isObject(data["user"]) && data["user"]) ||
-      undefined;
-    if (!ownerNode) {
+    const ownerNode = data["repositoryOwner"];
+    if (!isObject(ownerNode)) {
       throw new BoardError(
         "malformed",
-        "Board response does not contain a project owner",
+        "Board response does not contain a repository owner",
       );
     }
     const project = ownerNode["projectV2"];
@@ -234,60 +229,63 @@ function isObject(v: unknown): v is Record<string, unknown> {
 }
 
 const PROJECT_QUERY = `
-query($owner: String!, $projectNumber: Int!, $statusField: String!) {
-  organization(login: $owner) {
-    projectV2(number: $projectNumber) {
-      id
-      items(first: 100) {
-        nodes {
-          id
-          type
-          fieldValues(first: 20) {
-            nodes {
-              __typename
-              ... on ProjectV2ItemFieldSingleSelectValue {
-                name
-                field { ... on ProjectV2SingleSelectField { name } }
+query($owner: String!, $projectNumber: Int!) {
+  repositoryOwner(login: $owner) {
+    __typename
+    ... on User {
+      projectV2(number: $projectNumber) {
+        id
+        items(first: 100) {
+          nodes {
+            id
+            type
+            fieldValues(first: 20) {
+              nodes {
+                __typename
+                ... on ProjectV2ItemFieldSingleSelectValue {
+                  name
+                  field { ... on ProjectV2SingleSelectField { name } }
+                }
               }
             }
-          }
-          content {
-            __typename
-            ... on Issue {
-              number id title url createdAt
-              repository { owner { login } name }
+            content {
+              __typename
+              ... on Issue {
+                number id title url createdAt
+                repository { owner { login } name }
+              }
+              ... on PullRequest { number url }
+              ... on DraftIssue { title }
             }
-            ... on PullRequest { number url }
-            ... on DraftIssue { title }
           }
         }
       }
     }
-  }
-  user(login: $owner) {
-    projectV2(number: $projectNumber) {
-      id
-      items(first: 100) {
-        nodes {
-          id
-          type
-          fieldValues(first: 20) {
-            nodes {
-              __typename
-              ... on ProjectV2ItemFieldSingleSelectValue {
-                name
-                field { ... on ProjectV2SingleSelectField { name } }
+    ... on Organization {
+      projectV2(number: $projectNumber) {
+        id
+        items(first: 100) {
+          nodes {
+            id
+            type
+            fieldValues(first: 20) {
+              nodes {
+                __typename
+                ... on ProjectV2ItemFieldSingleSelectValue {
+                  name
+                  field { ... on ProjectV2SingleSelectField { name } }
+                }
               }
             }
-          }
-          content {
-            __typename
-            ... on Issue {
-              number id title url createdAt
-              repository { owner { login } name }
+            content {
+              __typename
+              ... on Issue {
+                number id title url createdAt
+                repository { owner { login } name }
+              }
+              ... on PullRequest { number url }
+              ... on DraftIssue { title }
             }
-            ... on PullRequest { number url }
-            ... on DraftIssue { title }
           }
         }
       }
