@@ -5,7 +5,10 @@ export {
 } from "./provisioner.ts";
 export type {
   ProvisionInput,
+  ProvisionOutcome,
   ProvisionResult,
+  ProvisionedWorkspace,
+  SkippedWorkspace,
   ValidateRemoteInput,
   ValidateRemoteResult,
   WorkspaceProvisionerOptions,
@@ -14,7 +17,7 @@ export type {
   GitRunner,
   ResetTaskBranchInput,
   AddWorktreeInput,
+  CloneInput,
 } from "./git-runner.ts";
 export { SubprocessGitRunner } from "./subprocess-git-runner.ts";
-export { RemoteMismatchError, RepositoryNotFoundError } from "./errors.ts";
 export { normalizeRemoteUrl } from "./remote-url.ts";
