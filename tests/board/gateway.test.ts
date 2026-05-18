@@ -354,6 +354,22 @@ describe("BoardGateway.pollQueuedTasks", () => {
     expect((caught as BoardError).kind).toBe("malformed");
   });
 
+  test("invokes gh api graphql parameterised by the configured Board", async () => {
+    const { runner, calls } = staticRunner(ok(graphqlResponse([])));
+    const gateway = new BoardGateway(fakeBoard(), { gh: runner });
+
+    await gateway.pollQueuedTasks();
+
+    expect(calls).toHaveLength(1);
+    const args = calls[0]!;
+    expect(args[0]).toBe("api");
+    expect(args[1]).toBe("graphql");
+    // Variables are bound (not interpolated) so values can't be injected.
+    expect(args).toContain("owner=octocat");
+    expect(args).toContain("projectNumber=7");
+    expect(args).toContain("statusField=Status");
+  });
+
   test("returns Queued Issue items as Tasks with full identity", async () => {
     const stdout = graphqlResponse([
       issueItem({
