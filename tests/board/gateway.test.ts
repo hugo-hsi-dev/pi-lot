@@ -163,6 +163,197 @@ function staticRunner(result: GhResult): {
 }
 
 describe("BoardGateway.pollQueuedTasks", () => {
+  test("skips Queued non-Issue Board items with a warning and no Task", async () => {
+    const stdout = graphqlResponse([
+      draftItem({
+        itemId: "PVTI_draft",
+        status: "Queued",
+        title: "design notes",
+      }),
+      prItem({
+        itemId: "PVTI_pr",
+        status: "Queued",
+        number: 88,
+        url: "https://github.com/octocat/widget/pull/88",
+      }),
+      issueItem({
+        itemId: "PVTI_issue",
+        status: "Queued",
+        issue: { number: 11 },
+      }),
+    ]);
+    const warnings: string[] = [];
+    const { runner } = staticRunner(ok(stdout));
+    const gateway = new BoardGateway(fakeBoard(), {
+      gh: runner,
+      warn: (line) => warnings.push(line),
+    });
+
+    const tasks = await gateway.pollQueuedTasks();
+
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.issueNumber).toBe(11);
+    expect(tasks[0]!.boardItemId).toBe("PVTI_issue");
+    expect(warnings).toHaveLength(2);
+    expect(warnings.some((w) => w.includes("PVTI_draft"))).toBe(true);
+    expect(warnings.some((w) => w.includes("PVTI_pr"))).toBe(true);
+    for (const w of warnings) {
+      expect(w.toLowerCase()).toContain("non-issue");
+    }
+  });
+
+  test("ignores Issue items that are not in the Queued status", async () => {
+    const stdout = graphqlResponse([
+      issueItem({
+        itemId: "PVTI_a",
+        status: "Implementing",
+        issue: { number: 1 },
+      }),
+      issueItem({ itemId: "PVTI_b", status: "Queued", issue: { number: 2 } }),
+      issueItem({
+        itemId: "PVTI_c",
+        status: "Ready for Review",
+        issue: { number: 3 },
+      }),
+      issueItem({ itemId: "PVTI_d", issue: { number: 4 } }), // no status set
+    ]);
+    const warnings: string[] = [];
+    const { runner } = staticRunner(ok(stdout));
+    const gateway = new BoardGateway(fakeBoard(), {
+      gh: runner,
+      warn: (line) => warnings.push(line),
+    });
+
+    const tasks = await gateway.pollQueuedTasks();
+
+    expect(tasks.map((t) => t.issueNumber)).toEqual([2]);
+    expect(warnings).toHaveLength(0);
+  });
+
+  test("returns Queued Issue Tasks ordered oldest first by createdAt", async () => {
+    const stdout = graphqlResponse([
+      issueItem({
+        itemId: "PVTI_newer",
+        status: "Queued",
+        issue: { number: 30, createdAt: "2026-05-10T00:00:00Z" },
+      }),
+      issueItem({
+        itemId: "PVTI_oldest",
+        status: "Queued",
+        issue: { number: 10, createdAt: "2026-01-01T00:00:00Z" },
+      }),
+      issueItem({
+        itemId: "PVTI_mid",
+        status: "Queued",
+        issue: { number: 20, createdAt: "2026-03-15T00:00:00Z" },
+      }),
+    ]);
+    const { runner } = staticRunner(ok(stdout));
+    const gateway = new BoardGateway(fakeBoard(), { gh: runner });
+
+    const tasks = await gateway.pollQueuedTasks();
+
+    expect(tasks.map((t) => t.issueNumber)).toEqual([10, 20, 30]);
+  });
+
+  test("surfaces GitHub Project permission errors with the gh auth refresh hint", async () => {
+    const stderr =
+      "GraphQL: Your token has not been granted the required scopes to execute this query. " +
+      'The "projectV2" field requires the "read:project" scope.';
+    const { runner } = staticRunner(fail(1, stderr));
+    const gateway = new BoardGateway(fakeBoard(), { gh: runner });
+
+    let caught: unknown;
+    try {
+      await gateway.pollQueuedTasks();
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(BoardError);
+    const err = caught as BoardError;
+    expect(err.kind).toBe("permission");
+    expect(err.message).toContain("gh auth refresh -s project");
+  });
+
+  test("non-permission gh failures are reported as gh-failed without the auth hint", async () => {
+    const { runner } = staticRunner(fail(1, "network unreachable"));
+    const gateway = new BoardGateway(fakeBoard(), { gh: runner });
+
+    let caught: unknown;
+    try {
+      await gateway.pollQueuedTasks();
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(BoardError);
+    const err = caught as BoardError;
+    expect(err.kind).toBe("gh-failed");
+    expect(err.message).not.toContain("gh auth refresh");
+  });
+
+  test("treats non-JSON gh output as a malformed BoardError", async () => {
+    const { runner } = staticRunner(ok("not json at all"));
+    const gateway = new BoardGateway(fakeBoard(), { gh: runner });
+
+    let caught: unknown;
+    try {
+      await gateway.pollQueuedTasks();
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(BoardError);
+    expect((caught as BoardError).kind).toBe("malformed");
+  });
+
+  test("treats responses without projectV2 as malformed", async () => {
+    const stdout = JSON.stringify({ data: { organization: null, user: null } });
+    const { runner } = staticRunner(ok(stdout));
+    const gateway = new BoardGateway(fakeBoard(), { gh: runner });
+
+    let caught: unknown;
+    try {
+      await gateway.pollQueuedTasks();
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(BoardError);
+    expect((caught as BoardError).kind).toBe("malformed");
+  });
+
+  test("treats Issue items with missing required fields as malformed", async () => {
+    // Item is type=ISSUE and Queued but content has no createdAt / number.
+    const stdout = graphqlResponse([
+      {
+        id: "PVTI_broken",
+        type: "ISSUE",
+        fieldValues: {
+          nodes: [
+            {
+              __typename: "ProjectV2ItemFieldSingleSelectValue",
+              name: "Queued",
+              field: { name: "Status" },
+            },
+          ],
+        },
+        content: {
+          __typename: "Issue",
+          // missing number, id, title, url, createdAt, repository
+        },
+      },
+    ]);
+    const { runner } = staticRunner(ok(stdout));
+    const gateway = new BoardGateway(fakeBoard(), { gh: runner });
+
+    let caught: unknown;
+    try {
+      await gateway.pollQueuedTasks();
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(BoardError);
+    expect((caught as BoardError).kind).toBe("malformed");
+  });
+
   test("returns Queued Issue items as Tasks with full identity", async () => {
     const stdout = graphqlResponse([
       issueItem({

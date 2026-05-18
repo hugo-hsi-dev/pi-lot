@@ -68,6 +68,11 @@ export class BoardGateway {
     for (const node of project.items) {
       this.collectTask(node, project, queuedLabel, tasks);
     }
+    tasks.sort((a, b) => {
+      if (a.createdAt < b.createdAt) return -1;
+      if (a.createdAt > b.createdAt) return 1;
+      return a.issueNumber - b.issueNumber;
+    });
     return tasks;
   }
 
