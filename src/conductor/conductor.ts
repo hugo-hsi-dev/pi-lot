@@ -2,6 +2,8 @@ import type { PiLotConfig } from "../config/index.ts";
 import { BoardGateway, BoardError } from "../board/index.ts";
 import type { GhRunner, Task } from "../board/index.ts";
 import { defaultGhRunner } from "../board/gh.ts";
+import { Scheduler } from "./scheduler.ts";
+import type { RunRunner } from "./scheduler.ts";
 
 /**
  * Minimal logger surface used by the Conductor. The `warn` channel is
@@ -18,6 +20,14 @@ export interface ConductorDeps {
   logger?: ConductorLogger;
   /** Injected `gh` runner. Defaults to spawning the real `gh` binary. */
   gh?: GhRunner;
+  /**
+   * Executes a single Task end-to-end. Production wires this to the Pi
+   * phase runner once it exists (#8-#10); tests inject a fake. When
+   * omitted, the Conductor uses a built-in placeholder runner that logs
+   * the dispatch and returns immediately — enough for issue #4 to
+   * exercise scheduling without performing real Phase work.
+   */
+  runner?: RunRunner;
 }
 
 /**
@@ -34,6 +44,7 @@ export class Conductor {
   private readonly config: PiLotConfig;
   private readonly logger: ConductorLogger;
   private readonly board: BoardGateway;
+  private readonly scheduler: Scheduler;
 
   constructor(config: PiLotConfig, deps: ConductorDeps | ConductorLogger = {}) {
     this.config = config;
@@ -43,6 +54,11 @@ export class Conductor {
     this.board = new BoardGateway(config.board, {
       gh: opts.gh ?? defaultGhRunner,
       warn: (line) => (this.logger.warn ?? console.warn)(line),
+    });
+    const runner: RunRunner = opts.runner ?? this.defaultRunner();
+    this.scheduler = new Scheduler({
+      concurrency: config.concurrency,
+      runner,
     });
   }
 
@@ -67,6 +83,28 @@ export class Conductor {
   }
 
   /**
+   * Run a single polling cycle: ask the Board for current Queued Tasks
+   * and let the Scheduler dispatch as many as the concurrency budget
+   * allows, oldest-first, skipping Tasks already active in this process.
+   *
+   * `tick` returns once dispatching has happened. It does *not* wait for
+   * the started Runs to finish — those continue in the background and
+   * free up scheduler slots when they complete.
+   */
+  public async tick(): Promise<void> {
+    const tasks = await this.pollOnce();
+    this.scheduler.schedule(tasks);
+  }
+
+  /**
+   * Resolve once every Run started by this Conductor has completed.
+   * Used by tests and by graceful shutdown.
+   */
+  public async idle(): Promise<void> {
+    await this.scheduler.idle();
+  }
+
+  /**
    * Start the Conductor. In this scaffold, `start` logs readiness and
    * returns immediately. Future subissues will replace the no-op body
    * with the polling loop and phase orchestration.
@@ -82,6 +120,22 @@ export class Conductor {
       "No Board polling implementation present yet; exiting cleanly (no-op).",
     );
   }
+
+  /**
+   * Placeholder runner used when no `runner` is injected. The real Pi
+   * phase runner is owned by later subissues (#8-#10); for now we just
+   * log the dispatch so issue #4 can wire scheduling end-to-end without
+   * blocking on phase work that does not exist yet.
+   */
+  private defaultRunner(): RunRunner {
+    return async (task: Task) => {
+      this.logger.log(
+        `pi-lot: would start Run for ${task.repository.owner}/` +
+          `${task.repository.name}#${task.issueNumber} (${task.title}). ` +
+          "Phase runner not implemented yet.",
+      );
+    };
+  }
 }
 
 /** Type guard separating the new deps bag from the legacy bare-logger arg. */
@@ -94,6 +148,7 @@ function isConductorDeps(
     typeof (v as { log?: unknown }).log === "function" &&
     typeof (v as { error?: unknown }).error === "function" &&
     !("gh" in v) &&
-    !("logger" in v);
+    !("logger" in v) &&
+    !("runner" in v);
   return !looksLikeLogger;
 }
