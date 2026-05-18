@@ -25,3 +25,9 @@ export {
   IMPLEMENT_PROMPT_VERSION,
   renderImplementPrompt,
 } from "./prompts/implement-v1.ts";
+export { ReviewPhase } from "./review.ts";
+export type { ReviewPhaseDeps, ReviewPhaseInput } from "./types.ts";
+export {
+  REVIEW_PROMPT_VERSION,
+  renderReviewPrompt,
+} from "./prompts/review-v1.ts";
