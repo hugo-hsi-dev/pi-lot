@@ -2,18 +2,11 @@
   "board": {
     "owner": "your-github-username",
     "projectNumber": 1,
-    "statusField": "Status",
-    "statusValues": {
-      "queued": "Queued",
-      "implementing": "Implementing",
-      "reviewing": "Reviewing",
-      "finalizing": "Finalizing",
-      "readyForReview": "Ready for Review",
-      "needsHuman": "Needs Human"
-    }
+    "statusField": "Status"
   },
   "projectsDir": "~/Projects",
   "stateDir": ".pi-lot-state",
+  "workflowDir": ".workflow",
   "pollIntervalMs": 30000,
   "concurrency": 5
 }

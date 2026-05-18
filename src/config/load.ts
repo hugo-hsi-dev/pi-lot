@@ -1,32 +1,21 @@
 import { resolve, isAbsolute } from "node:path";
 import { homedir } from "node:os";
 import { ConfigError } from "./errors.ts";
-import type {
-  BoardStatusKey,
-  BoardStatusMap,
-  PiLotConfig,
-} from "./types.ts";
+import type { PiLotConfig } from "./types.ts";
 
 const DEFAULT_CONFIG_PATH = ".pi-lot.config.json";
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
 const DEFAULT_CONCURRENCY = 5;
 const DEFAULT_STATE_DIR = ".pi-lot-state";
-
-const REQUIRED_STATUS_KEYS: BoardStatusKey[] = [
-  "queued",
-  "implementing",
-  "reviewing",
-  "finalizing",
-  "readyForReview",
-  "needsHuman",
-];
+const DEFAULT_WORKFLOW_DIR = ".workflow";
 
 /**
  * Load and validate the Pi Lot configuration from disk.
  *
  * Behavior:
- * - If `path` is provided, that file is used.
- * - Otherwise, looks for `.pi-lot.config.json` in `cwd`.
+ * - If `path` is provided, that file is used directly.
+ * - Otherwise, looks for `.pi-lot.config.json` in `cwd` only — no upward
+ *   search of parent directories.
  * - Missing file, invalid JSON, or invalid fields throw {@link ConfigError}.
  *
  * All path-shaped fields are returned as absolute paths. `~` is expanded
@@ -91,6 +80,13 @@ export function validateConfig(
     issues,
   ) ?? resolve(ctx.cwd, DEFAULT_STATE_DIR);
 
+  const workflowDir = validateOptionalPath(
+    raw["workflowDir"],
+    "workflowDir",
+    ctx.cwd,
+    issues,
+  ) ?? resolve(ctx.cwd, DEFAULT_WORKFLOW_DIR);
+
   const pollIntervalMs = validatePositiveInt(
     raw["pollIntervalMs"],
     "pollIntervalMs",
@@ -112,6 +108,7 @@ export function validateConfig(
     board: board!,
     projectsDir: projectsDir!,
     stateDir,
+    workflowDir,
     pollIntervalMs,
     concurrency,
   };
@@ -146,13 +143,16 @@ function validateBoard(value: unknown, issues: string[]) {
     issues.push("board.statusField must be a non-empty string");
   }
 
-  const statusValues = validateStatusValues(value["statusValues"], issues);
+  // `board.statusValues` is intentionally NOT validated. It used to map
+  // Pi Lot phase keys to Board option labels, but Board status values
+  // now come from workflow Task Definition filenames at runtime. A
+  // legacy `statusValues` field in the JSON is silently ignored so
+  // existing configs keep working during migration.
 
   if (
     typeof owner !== "string" ||
     typeof projectNumber !== "number" ||
-    typeof statusField !== "string" ||
-    !statusValues
+    typeof statusField !== "string"
   ) {
     return undefined;
   }
@@ -161,37 +161,7 @@ function validateBoard(value: unknown, issues: string[]) {
     owner: owner.trim(),
     projectNumber,
     statusField: statusField.trim(),
-    statusValues,
   };
-}
-
-function validateStatusValues(
-  value: unknown,
-  issues: string[],
-): BoardStatusMap | undefined {
-  if (value === undefined) {
-    issues.push("Missing required field: board.statusValues");
-    return undefined;
-  }
-  if (!isPlainObject(value)) {
-    issues.push("board.statusValues must be an object");
-    return undefined;
-  }
-
-  const out: Partial<BoardStatusMap> = {};
-  for (const key of REQUIRED_STATUS_KEYS) {
-    const v = value[key];
-    if (typeof v !== "string" || v.trim() === "") {
-      issues.push(`board.statusValues.${key} must be a non-empty string`);
-    } else {
-      out[key] = v.trim();
-    }
-  }
-
-  if (Object.keys(out).length !== REQUIRED_STATUS_KEYS.length) {
-    return undefined;
-  }
-  return out as BoardStatusMap;
 }
 
 function validateRequiredPath(
