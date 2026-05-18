@@ -170,3 +170,32 @@ export interface ImplementPhaseDeps {
    */
   env?: NodeJS.ProcessEnv;
 }
+
+/** Input passed to {@link ReviewPhase.run}. */
+export interface ReviewPhaseInput {
+  task: Task;
+  run: Run;
+  workspace: WorkspaceFacts;
+}
+
+/**
+ * Shared dependencies wired into the Review Phase (issue #9).
+ *
+ * Same shape as {@link ImplementPhaseDeps} for now: each Phase is a
+ * fresh Pi SDK session with the same seam (board, run store, session
+ * factory, status updater, issue-context loader). The Review Phase
+ * differs only in which Board status it sets and which prompt it
+ * renders.
+ */
+export interface ReviewPhaseDeps {
+  board: BoardConfig;
+  runStore: RunStore;
+  piSessionFactory: PiSessionFactory;
+  boardStatusUpdater: BoardStatusUpdater;
+  issueContextLoader: IssueContextLoader;
+  /**
+   * Environment the fresh Pi session inherits. Defaults to the worker
+   * process environment (PRD #1 user story 38).
+   */
+  env?: NodeJS.ProcessEnv;
+}
