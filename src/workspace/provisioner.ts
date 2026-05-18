@@ -1,5 +1,8 @@
+import { stat } from "node:fs/promises";
 import { join } from "node:path";
+import { RemoteMismatchError, RepositoryNotFoundError } from "./errors.ts";
 import type { GitRunner } from "./git-runner.ts";
+import { normalizeRemoteUrl } from "./remote-url.ts";
 
 /**
  * Per-Task workspace provisioning result.
@@ -37,6 +40,26 @@ export interface WorkspaceProvisionerOptions {
   /** Git subprocess abstraction (injected for tests). */
   git: GitRunner;
 }
+
+export interface ValidateRemoteInput {
+  owner: string;
+  repo: string;
+  expectedRemote: string;
+}
+
+/** Result of the remote-validation hook. */
+export type ValidateRemoteResult =
+  | {
+      ok: true;
+      repoPath: string;
+      actualRemote: string;
+    }
+  | {
+      ok: false;
+      reason: "not-found" | "remote-mismatch";
+      repoPath: string;
+      actualRemote?: string;
+    };
 
 /** Build the Task Branch name reused across Runs for a given Issue. */
 export function taskBranchName(owner: string, repo: string, issueNumber: number): string {
@@ -82,8 +105,56 @@ export class WorkspaceProvisioner {
     this.git = opts.git;
   }
 
+  /**
+   * Inspect the flat projects-directory entry for an Issue's repository
+   * and report whether it can be reused.
+   *
+   * Returns `{ ok: true }` when the repo exists locally and its `origin`
+   * remote matches `expectedRemote` (URL forms collapsed via
+   * {@link normalizeRemoteUrl}). Returns `{ ok: false, reason }` for the
+   * two failure shapes the Conductor cares about: missing local clone
+   * (handled in #7) or remote mismatch (skip Task policy in #7).
+   *
+   * This method performs no mutation, so the Conductor can call it
+   * before deciding whether to clone, skip, or proceed.
+   */
+  public async validateRemote(input: ValidateRemoteInput): Promise<ValidateRemoteResult> {
+    const repoPath = this.repoPathFor(input.repo);
+    if (!(await this.repoExists(repoPath))) {
+      return { ok: false, reason: "not-found", repoPath };
+    }
+    const actualRemote = await this.git.getRemoteUrl(repoPath);
+    if (normalizeRemoteUrl(actualRemote) !== normalizeRemoteUrl(input.expectedRemote)) {
+      return { ok: false, reason: "remote-mismatch", repoPath, actualRemote };
+    }
+    return { ok: true, repoPath, actualRemote };
+  }
+
   public async provision(input: ProvisionInput): Promise<ProvisionResult> {
-    const repoPath = join(this.projectsDir, input.repo);
+    const validation = await this.validateRemote({
+      owner: input.owner,
+      repo: input.repo,
+      expectedRemote: input.expectedRemote,
+    });
+
+    if (!validation.ok) {
+      if (validation.reason === "not-found") {
+        throw new RepositoryNotFoundError({
+          owner: input.owner,
+          repo: input.repo,
+          expectedPath: validation.repoPath,
+        });
+      }
+      throw new RemoteMismatchError({
+        owner: input.owner,
+        repo: input.repo,
+        repoPath: validation.repoPath,
+        expectedRemote: input.expectedRemote,
+        actualRemote: validation.actualRemote ?? "(unknown)",
+      });
+    }
+
+    const repoPath = validation.repoPath;
     const taskBranch = taskBranchName(input.owner, input.repo, input.issueNumber);
     const worktreePath = worktreePathFor(
       this.stateDir,
@@ -92,6 +163,7 @@ export class WorkspaceProvisioner {
       input.issueNumber,
     );
 
+    await this.git.fetchOrigin(repoPath);
     const baseBranch = await this.git.resolveDefaultBranch(repoPath);
     await this.git.resetTaskBranch({ repoPath, branch: taskBranch, base: baseBranch });
 
@@ -101,5 +173,18 @@ export class WorkspaceProvisioner {
     await this.git.addWorktree({ repoPath, worktreePath, branch: taskBranch });
 
     return { repoPath, worktreePath, taskBranch, baseBranch };
+  }
+
+  private repoPathFor(repo: string): string {
+    return join(this.projectsDir, repo);
+  }
+
+  private async repoExists(repoPath: string): Promise<boolean> {
+    try {
+      const s = await stat(join(repoPath, ".git"));
+      return s.isDirectory() || s.isFile();
+    } catch {
+      return false;
+    }
   }
 }
