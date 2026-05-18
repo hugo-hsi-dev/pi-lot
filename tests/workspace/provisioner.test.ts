@@ -3,12 +3,28 @@ import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  RemoteMismatchError,
-  RepositoryNotFoundError,
   WorkspaceProvisioner,
   normalizeRemoteUrl,
 } from "../../src/workspace/index.ts";
+import type {
+  ProvisionOutcome,
+  ProvisionedWorkspace,
+} from "../../src/workspace/index.ts";
 import { FakeGitRunner } from "./fake-git-runner.ts";
+
+/**
+ * Narrow a {@link ProvisionOutcome} to the success variant for tests
+ * that intentionally exercise the happy path. Throws (and fails the
+ * test) if the provisioner unexpectedly returned a skip.
+ */
+function assertProvisioned(outcome: ProvisionOutcome): ProvisionedWorkspace {
+  if (outcome.kind !== "provisioned") {
+    throw new Error(
+      `Expected a provisioned workspace, got skipped (${outcome.reason}).`,
+    );
+  }
+  return outcome;
+}
 
 function makeTempDirs() {
   const root = mkdtempSync(join(tmpdir(), "pilot-ws-"));
@@ -38,12 +54,14 @@ describe("WorkspaceProvisioner.provision (existing matching repo)", () => {
     });
     const provisioner = new WorkspaceProvisioner({ projectsDir, stateDir, git });
 
-    const result = await provisioner.provision({
-      owner: "hugo-hsi-dev",
-      repo: "pi-lot",
-      issueNumber: 6,
-      expectedRemote: "git@github.com:hugo-hsi-dev/pi-lot.git",
-    });
+    const result = assertProvisioned(
+      await provisioner.provision({
+        owner: "hugo-hsi-dev",
+        repo: "pi-lot",
+        issueNumber: 6,
+        expectedRemote: "git@github.com:hugo-hsi-dev/pi-lot.git",
+      }),
+    );
 
     expect(result.repoPath).toBe(join(projectsDir, "pi-lot"));
   });
@@ -61,12 +79,14 @@ describe("WorkspaceProvisioner.provision (existing matching repo)", () => {
     });
     const provisioner = new WorkspaceProvisioner({ projectsDir, stateDir, git });
 
-    const result = await provisioner.provision({
-      owner: "acme",
-      repo: "weird-repo",
-      issueNumber: 42,
-      expectedRemote: "git@github.com:acme/weird-repo.git",
-    });
+    const result = assertProvisioned(
+      await provisioner.provision({
+        owner: "acme",
+        repo: "weird-repo",
+        issueNumber: 42,
+        expectedRemote: "git@github.com:acme/weird-repo.git",
+      }),
+    );
 
     expect(result.baseBranch).toBe("trunk");
     expect(git.calls.some((c) => c.op === "resolveDefaultBranch")).toBe(true);
@@ -83,18 +103,22 @@ describe("WorkspaceProvisioner.provision (existing matching repo)", () => {
     });
     const provisioner = new WorkspaceProvisioner({ projectsDir, stateDir, git });
 
-    const first = await provisioner.provision({
-      owner: "hugo-hsi-dev",
-      repo: "pi-lot",
-      issueNumber: 6,
-      expectedRemote: "git@github.com:hugo-hsi-dev/pi-lot.git",
-    });
-    const second = await provisioner.provision({
-      owner: "hugo-hsi-dev",
-      repo: "pi-lot",
-      issueNumber: 6,
-      expectedRemote: "git@github.com:hugo-hsi-dev/pi-lot.git",
-    });
+    const first = assertProvisioned(
+      await provisioner.provision({
+        owner: "hugo-hsi-dev",
+        repo: "pi-lot",
+        issueNumber: 6,
+        expectedRemote: "git@github.com:hugo-hsi-dev/pi-lot.git",
+      }),
+    );
+    const second = assertProvisioned(
+      await provisioner.provision({
+        owner: "hugo-hsi-dev",
+        repo: "pi-lot",
+        issueNumber: 6,
+        expectedRemote: "git@github.com:hugo-hsi-dev/pi-lot.git",
+      }),
+    );
 
     expect(second.taskBranch).toBe(first.taskBranch);
     expect(first.taskBranch).toContain("issue-6");
@@ -110,12 +134,14 @@ describe("WorkspaceProvisioner.provision (existing matching repo)", () => {
     });
     const provisioner = new WorkspaceProvisioner({ projectsDir, stateDir, git });
 
-    const result = await provisioner.provision({
-      owner: "hugo-hsi-dev",
-      repo: "pi-lot",
-      issueNumber: 6,
-      expectedRemote: "git@github.com:hugo-hsi-dev/pi-lot.git",
-    });
+    const result = assertProvisioned(
+      await provisioner.provision({
+        owner: "hugo-hsi-dev",
+        repo: "pi-lot",
+        issueNumber: 6,
+        expectedRemote: "git@github.com:hugo-hsi-dev/pi-lot.git",
+      }),
+    );
 
     const reset = git.calls.find((c) => c.op === "resetTaskBranch");
     expect(reset).toBeDefined();
@@ -134,12 +160,14 @@ describe("WorkspaceProvisioner.provision (existing matching repo)", () => {
     });
     const provisioner = new WorkspaceProvisioner({ projectsDir, stateDir, git });
 
-    const result = await provisioner.provision({
-      owner: "hugo-hsi-dev",
-      repo: "pi-lot",
-      issueNumber: 6,
-      expectedRemote: "git@github.com:hugo-hsi-dev/pi-lot.git",
-    });
+    const result = assertProvisioned(
+      await provisioner.provision({
+        owner: "hugo-hsi-dev",
+        repo: "pi-lot",
+        issueNumber: 6,
+        expectedRemote: "git@github.com:hugo-hsi-dev/pi-lot.git",
+      }),
+    );
 
     const expectedPath = join(stateDir, "hugo-hsi-dev", "pi-lot", "6");
     expect(result.worktreePath).toBe(expectedPath);
@@ -250,50 +278,16 @@ describe("WorkspaceProvisioner.validateRemote", () => {
     });
 
     expect(result.ok).toBe(false);
+    if (result.ok) return;
     expect(result.reason).toBe("not-found");
   });
 });
 
-describe("WorkspaceProvisioner.provision (failure modes)", () => {
-  test("throws RepositoryNotFoundError when projectsDir has no matching repo", async () => {
-    const { projectsDir, stateDir } = makeTempDirs();
-    const git = new FakeGitRunner();
-    const provisioner = new WorkspaceProvisioner({ projectsDir, stateDir, git });
-
-    await expect(
-      provisioner.provision({
-        owner: "hugo-hsi-dev",
-        repo: "missing-repo",
-        issueNumber: 6,
-        expectedRemote: "git@github.com:hugo-hsi-dev/missing-repo.git",
-      }),
-    ).rejects.toBeInstanceOf(RepositoryNotFoundError);
-  });
-
-  test("throws RemoteMismatchError when the local repo's origin disagrees with Issue", async () => {
-    const { projectsDir, stateDir } = makeTempDirs();
-    withExistingRepo(projectsDir, "pi-lot", "git@github.com:someone-else/pi-lot.git");
-    const repoPath = join(projectsDir, "pi-lot");
-    const git = new FakeGitRunner({
-      remoteUrls: { [repoPath]: "git@github.com:someone-else/pi-lot.git" },
-      defaultBranches: { [repoPath]: "main" },
-    });
-    const provisioner = new WorkspaceProvisioner({ projectsDir, stateDir, git });
-
-    await expect(
-      provisioner.provision({
-        owner: "hugo-hsi-dev",
-        repo: "pi-lot",
-        issueNumber: 6,
-        expectedRemote: "git@github.com:hugo-hsi-dev/pi-lot.git",
-      }),
-    ).rejects.toBeInstanceOf(RemoteMismatchError);
-
-    // No worktree work should happen on a mismatch.
-    expect(git.calls.some((c) => c.op === "addWorktree")).toBe(false);
-    expect(git.calls.some((c) => c.op === "resetTaskBranch")).toBe(false);
-  });
-});
+// Behavior for missing repositories and remote-mismatch collisions is
+// covered in `clone.test.ts` (issue #7). Previously this section asserted
+// that those situations threw `RepositoryNotFoundError` /
+// `RemoteMismatchError`; both are now non-throw outcomes
+// (clone-and-continue, and skip-with-warning respectively).
 
 describe("normalizeRemoteUrl", () => {
   test("collapses ssh and https forms of the same GitHub repo", () => {

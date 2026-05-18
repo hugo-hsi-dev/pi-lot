@@ -1,6 +1,9 @@
 import { spawn } from "node:child_process";
+import { dirname } from "node:path";
+import { mkdir } from "node:fs/promises";
 import type {
   AddWorktreeInput,
+  CloneInput,
   GitRunner,
   ResetTaskBranchInput,
 } from "./git-runner.ts";
@@ -22,6 +25,15 @@ export class SubprocessGitRunner implements GitRunner {
 
   constructor(opts: { gitBin?: string } = {}) {
     this.gitBin = opts.gitBin ?? "git";
+  }
+
+  async clone(input: CloneInput): Promise<void> {
+    // `git clone <url> <target>` is invoked from the parent directory
+    // (which `git -C` requires to exist). Ensure the parent exists so
+    // a brand-new projects directory can host the first clone.
+    const parent = dirname(input.repoPath);
+    await mkdir(parent, { recursive: true });
+    await this.run(parent, ["clone", input.remoteUrl, input.repoPath]);
   }
 
   async getRemoteUrl(repoPath: string, remote = "origin"): Promise<string> {

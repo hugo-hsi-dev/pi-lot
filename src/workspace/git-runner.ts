@@ -28,7 +28,21 @@ export interface AddWorktreeInput {
   branch: string;
 }
 
+export interface CloneInput {
+  /** Absolute path where the new clone should be created. */
+  repoPath: string;
+  /** Git remote URL to clone from (the Issue's repository). */
+  remoteUrl: string;
+}
+
 export interface GitRunner {
+  /**
+   * Clone `remoteUrl` into `repoPath` so a missing flat projects-directory
+   * entry becomes a usable source repository for the rest of the
+   * provisioning sequence.
+   */
+  clone(input: CloneInput): Promise<void>;
+
   /** Return the URL configured for the given remote (default `origin`). */
   getRemoteUrl(repoPath: string, remote?: string): Promise<string>;
 

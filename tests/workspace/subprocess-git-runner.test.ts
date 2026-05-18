@@ -99,12 +99,17 @@ describe("SubprocessGitRunner (local git)", () => {
       git: new SubprocessGitRunner(),
     });
 
-    const result = await provisioner.provision({
+    const outcome = await provisioner.provision({
       owner: "acme",
       repo: "demo",
       issueNumber: 12,
       expectedRemote: remotePath,
     });
+
+    if (outcome.kind !== "provisioned") {
+      throw new Error(`expected provisioned outcome, got ${outcome.kind}`);
+    }
+    const result = outcome;
 
     expect(result.repoPath).toBe(flatRepoPath);
     expect(result.baseBranch).toBe("trunk");
@@ -118,6 +123,88 @@ describe("SubprocessGitRunner (local git)", () => {
       { encoding: "utf8" },
     );
     expect(head.stdout.trim()).toBe(result.taskBranch);
+  });
+
+  test("clone creates a working clone whose origin matches the requested URL", async () => {
+    const { remotePath } = setupRepo("main");
+    const projectsDir = mkdtempSync(join(tmpdir(), "pilot-clone-"));
+    const target = join(projectsDir, "demo");
+
+    const runner = new SubprocessGitRunner();
+    await runner.clone({ repoPath: target, remoteUrl: remotePath });
+
+    expect(existsSync(join(target, ".git"))).toBe(true);
+    expect(await runner.getRemoteUrl(target)).toBe(remotePath);
+  });
+
+  test("WorkspaceProvisioner end-to-end clones a missing repository before provisioning", async () => {
+    const { remotePath } = setupRepo("main");
+
+    const baseRoot = mkdtempSync(join(tmpdir(), "pilot-e2e-clone-"));
+    const projectsDir = join(baseRoot, "projects");
+    const stateDir = join(baseRoot, "state");
+    mkdirSync(projectsDir, { recursive: true });
+    mkdirSync(stateDir, { recursive: true });
+
+    // Note: no repo at <projectsDir>/demo. The provisioner must clone it.
+    const provisioner = new WorkspaceProvisioner({
+      projectsDir,
+      stateDir,
+      git: new SubprocessGitRunner(),
+    });
+
+    const outcome = await provisioner.provision({
+      owner: "acme",
+      repo: "demo",
+      issueNumber: 7,
+      expectedRemote: remotePath,
+    });
+
+    if (outcome.kind !== "provisioned") {
+      throw new Error(`expected provisioned outcome, got ${outcome.kind}`);
+    }
+    expect(outcome.repoPath).toBe(join(projectsDir, "demo"));
+    expect(existsSync(join(projectsDir, "demo", ".git"))).toBe(true);
+    expect(existsSync(outcome.worktreePath)).toBe(true);
+  });
+
+  test("WorkspaceProvisioner skips with a warning when the local clone has a different origin", async () => {
+    const { remotePath: realRemote } = setupRepo("main");
+    const { remotePath: otherRemote } = setupRepo("main");
+
+    const baseRoot = mkdtempSync(join(tmpdir(), "pilot-skip-"));
+    const projectsDir = join(baseRoot, "projects");
+    const stateDir = join(baseRoot, "state");
+    mkdirSync(projectsDir, { recursive: true });
+    mkdirSync(stateDir, { recursive: true });
+
+    // Pre-populate the flat path with a clone of the *other* repo, which
+    // simulates the unsafe name collision the Conductor must skip.
+    const runner = new SubprocessGitRunner();
+    await runner.clone({
+      repoPath: join(projectsDir, "demo"),
+      remoteUrl: otherRemote,
+    });
+
+    const warnings: string[] = [];
+    const provisioner = new WorkspaceProvisioner({
+      projectsDir,
+      stateDir,
+      git: runner,
+      warn: (m) => warnings.push(m),
+    });
+
+    const outcome = await provisioner.provision({
+      owner: "acme",
+      repo: "demo",
+      issueNumber: 7,
+      expectedRemote: realRemote,
+    });
+
+    expect(outcome.kind).toBe("skipped");
+    expect(warnings.length).toBeGreaterThan(0);
+    // No worktree should be created on a collision.
+    expect(existsSync(join(stateDir, "acme", "demo", "7"))).toBe(false);
   });
 
   test("addWorktree, worktreeExists and removeWorktree round-trip", async () => {

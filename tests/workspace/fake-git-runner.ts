@@ -5,11 +5,24 @@
  * observable side-effects (fetches, branch resets, worktree creation)
  * without coupling to internal helper structure.
  */
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import type {
   AddWorktreeInput,
+  CloneInput,
   GitRunner,
   ResetTaskBranchInput,
 } from "../../src/workspace/git-runner.ts";
+
+/**
+ * Side-effects the fake should apply when `clone(repoPath)` is invoked
+ * for a particular target path: register the cloned repo's remote URL
+ * and default branch so the subsequent provisioning steps succeed.
+ */
+export interface FakeCloneEffect {
+  remoteUrl: string;
+  defaultBranch: string;
+}
 
 export interface FakeGitRunnerOptions {
   /** Map repoPath -> remote URL returned for `origin`. */
@@ -18,10 +31,19 @@ export interface FakeGitRunnerOptions {
   defaultBranches?: Record<string, string>;
   /** Optional list of existing worktree paths the fake should report. */
   existingWorktrees?: string[];
+  /**
+   * Per-target side effects applied by `clone()`. When `clone(repoPath)`
+   * is invoked and `repoPath` matches a key here, the fake records the
+   * remote URL and default branch so later operations see a real-looking
+   * clone. The fake also creates a `.git` marker so on-disk existence
+   * checks pass.
+   */
+  cloneEffects?: Record<string, FakeCloneEffect>;
 }
 
 export interface FakeGitCall {
   op:
+    | "clone"
     | "getRemoteUrl"
     | "fetchOrigin"
     | "resolveDefaultBranch"
@@ -38,11 +60,33 @@ export class FakeGitRunner implements GitRunner {
   private readonly remoteUrls: Record<string, string>;
   private readonly defaultBranches: Record<string, string>;
   private readonly existingWorktrees: Set<string>;
+  private readonly cloneEffects: Record<string, FakeCloneEffect>;
 
   constructor(opts: FakeGitRunnerOptions = {}) {
     this.remoteUrls = { ...(opts.remoteUrls ?? {}) };
     this.defaultBranches = { ...(opts.defaultBranches ?? {}) };
     this.existingWorktrees = new Set(opts.existingWorktrees ?? []);
+    this.cloneEffects = { ...(opts.cloneEffects ?? {}) };
+  }
+
+  async clone(input: CloneInput): Promise<void> {
+    this.calls.push({
+      op: "clone",
+      repoPath: input.repoPath,
+      args: { remoteUrl: input.remoteUrl },
+    });
+    // Mimic what `git clone` produces on disk so the provisioner's
+    // post-clone existence check (and any caller's) succeeds.
+    mkdirSync(join(input.repoPath, ".git"), { recursive: true });
+    const effect = this.cloneEffects[input.repoPath];
+    if (effect) {
+      this.remoteUrls[input.repoPath] = effect.remoteUrl;
+      this.defaultBranches[input.repoPath] = effect.defaultBranch;
+    } else {
+      // Fall back to the URL the caller asked for; tests that care about
+      // the default branch must register a cloneEffect explicitly.
+      this.remoteUrls[input.repoPath] = input.remoteUrl;
+    }
   }
 
   async getRemoteUrl(repoPath: string, remote = "origin"): Promise<string> {

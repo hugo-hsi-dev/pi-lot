@@ -1,6 +1,5 @@
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
-import { RemoteMismatchError, RepositoryNotFoundError } from "./errors.ts";
 import type { GitRunner } from "./git-runner.ts";
 import { normalizeRemoteUrl } from "./remote-url.ts";
 
@@ -10,8 +9,9 @@ import { normalizeRemoteUrl } from "./remote-url.ts";
  * The Conductor passes these facts to phase agents so they can operate
  * on the worktree without re-deriving paths or branch names.
  */
-export interface ProvisionResult {
-  /** Absolute path of the reused source repository. */
+export interface ProvisionedWorkspace {
+  kind: "provisioned";
+  /** Absolute path of the source repository. */
   repoPath: string;
   /** Absolute path of the isolated Task worktree. */
   worktreePath: string;
@@ -20,6 +20,31 @@ export interface ProvisionResult {
   /** Repository default branch resolved at the start of the Run. */
   baseBranch: string;
 }
+
+/**
+ * Outcome when the projects-directory entry already exists but points
+ * at a different remote. The Conductor must not run a Task in the
+ * wrong repository, so it skips with a local warning.
+ */
+export interface SkippedWorkspace {
+  kind: "skipped";
+  /** Why provisioning was skipped. Currently only one reason exists. */
+  reason: "remote-mismatch";
+  /** Absolute path of the colliding flat-layout entry. */
+  repoPath: string;
+  /** Remote URL the Issue expected. */
+  expectedRemote: string;
+  /** Remote URL actually configured at the local path. */
+  actualRemote: string;
+}
+
+export type ProvisionOutcome = ProvisionedWorkspace | SkippedWorkspace;
+
+/**
+ * Back-compat alias for the original "happy path only" shape.
+ * @deprecated Prefer narrowing on {@link ProvisionOutcome.kind}.
+ */
+export type ProvisionResult = ProvisionedWorkspace;
 
 export interface ProvisionInput {
   /** GitHub owner (user or org) that owns the Issue's repository. */
@@ -39,6 +64,12 @@ export interface WorkspaceProvisionerOptions {
   stateDir: string;
   /** Git subprocess abstraction (injected for tests). */
   git: GitRunner;
+  /**
+   * Optional local-warning sink. Used for non-fatal skip events such as
+   * a name collision against a different remote. Defaults to
+   * `console.warn`.
+   */
+  warn?: (message: string) => void;
 }
 
 export interface ValidateRemoteInput {
@@ -81,28 +112,31 @@ export function worktreePathFor(
  * prepares an isolated worktree on a fresh Task Branch rooted at the
  * repository's current default branch.
  *
- * Scope (issue #6):
- * - Reuses an existing matching repository in {@link projectsDir}.
- * - Exposes a remote-validation hook (`validateRemote`). Skip-on-mismatch
- *   policy is owned by issue #7.
+ * Scope:
+ * - Reuses an existing matching repository in {@link projectsDir} (#6).
+ * - Clones the repository into the flat projects-directory layout when
+ *   missing (#7).
+ * - Returns a `skipped` outcome with a local warning when the flat
+ *   layout entry exists but points at a different remote (#7).
  * - Resolves the repository default branch dynamically via the injected
  *   GitRunner.
  * - Reuses one Task Branch per Issue and resets it to the default-branch
  *   base at the start of each Run.
  * - Creates the worktree under `<stateDir>/<owner>/<repo>/<issueNumber>/`.
  *
- * Out of scope: cloning missing repositories (issue #7), cleanup policy
- * after Run termination (issue #14).
+ * Out of scope: cleanup policy after Run termination (issue #14).
  */
 export class WorkspaceProvisioner {
   private readonly projectsDir: string;
   private readonly stateDir: string;
   private readonly git: GitRunner;
+  private readonly warn: (message: string) => void;
 
   constructor(opts: WorkspaceProvisionerOptions) {
     this.projectsDir = opts.projectsDir;
     this.stateDir = opts.stateDir;
     this.git = opts.git;
+    this.warn = opts.warn ?? ((m) => console.warn(m));
   }
 
   /**
@@ -113,7 +147,7 @@ export class WorkspaceProvisioner {
    * remote matches `expectedRemote` (URL forms collapsed via
    * {@link normalizeRemoteUrl}). Returns `{ ok: false, reason }` for the
    * two failure shapes the Conductor cares about: missing local clone
-   * (handled in #7) or remote mismatch (skip Task policy in #7).
+   * (which triggers a clone) or remote mismatch (skip Task policy).
    *
    * This method performs no mutation, so the Conductor can call it
    * before deciding whether to clone, skip, or proceed.
@@ -130,31 +164,40 @@ export class WorkspaceProvisioner {
     return { ok: true, repoPath, actualRemote };
   }
 
-  public async provision(input: ProvisionInput): Promise<ProvisionResult> {
+  public async provision(input: ProvisionInput): Promise<ProvisionOutcome> {
     const validation = await this.validateRemote({
       owner: input.owner,
       repo: input.repo,
       expectedRemote: input.expectedRemote,
     });
 
-    if (!validation.ok) {
-      if (validation.reason === "not-found") {
-        throw new RepositoryNotFoundError({
-          owner: input.owner,
-          repo: input.repo,
-          expectedPath: validation.repoPath,
-        });
-      }
-      throw new RemoteMismatchError({
-        owner: input.owner,
-        repo: input.repo,
+    if (!validation.ok && validation.reason === "remote-mismatch") {
+      const actualRemote = validation.actualRemote ?? "(unknown)";
+      this.warn(
+        `pi-lot: skipping ${input.owner}/${input.repo} #${input.issueNumber}: ` +
+          `local path ${validation.repoPath} has origin ${actualRemote}, ` +
+          `expected ${input.expectedRemote}.`,
+      );
+      return {
+        kind: "skipped",
+        reason: "remote-mismatch",
         repoPath: validation.repoPath,
         expectedRemote: input.expectedRemote,
-        actualRemote: validation.actualRemote ?? "(unknown)",
-      });
+        actualRemote,
+      };
     }
 
-    const repoPath = validation.repoPath;
+    let repoPath: string;
+    if (!validation.ok && validation.reason === "not-found") {
+      repoPath = validation.repoPath;
+      await this.git.clone({ repoPath, remoteUrl: input.expectedRemote });
+    } else if (validation.ok) {
+      repoPath = validation.repoPath;
+    } else {
+      // Defensive: all `validation.ok === false` reasons are handled above.
+      throw new Error(`Unexpected validation result for ${input.owner}/${input.repo}`);
+    }
+
     const taskBranch = taskBranchName(input.owner, input.repo, input.issueNumber);
     const worktreePath = worktreePathFor(
       this.stateDir,
@@ -172,7 +215,7 @@ export class WorkspaceProvisioner {
     }
     await this.git.addWorktree({ repoPath, worktreePath, branch: taskBranch });
 
-    return { repoPath, worktreePath, taskBranch, baseBranch };
+    return { kind: "provisioned", repoPath, worktreePath, taskBranch, baseBranch };
   }
 
   private repoPathFor(repo: string): string {
