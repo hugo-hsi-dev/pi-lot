@@ -231,13 +231,6 @@ export class TaskRunner {
     // Happy path.
     const completedAt = clock();
     store.updateRunStatus({ runId, status: "succeeded", completedAt });
-    store.appendEvent({
-      ts: completedAt,
-      issueKey,
-      taskDefinition: taskDefinition.queue,
-      kind: "run_completed",
-      payload: { runId },
-    });
 
     try {
       await this.deps.transitionService.applyTransition({

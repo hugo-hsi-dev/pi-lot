@@ -37,7 +37,7 @@ async function main(): Promise<number> {
     return 1;
   }
 
-  const { orchestrator } = await buildPiLotRuntime({ config });
+  const { orchestrator, store } = await buildPiLotRuntime({ config });
 
   const controller = new AbortController();
   const onSignal = () => controller.abort();
@@ -50,6 +50,7 @@ async function main(): Promise<number> {
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
     await orchestrator.idle();
+    store.close();
   }
   return 0;
 }

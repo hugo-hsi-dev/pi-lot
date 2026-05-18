@@ -199,6 +199,12 @@ describe("TaskRunner.runTask", () => {
     });
 
     const candidate = makeCandidate();
+    store.claimTask({
+      issueKey: "octocat/widget#42",
+      taskDefinition: "Implement",
+      runId: "run-1",
+      ts: "2026-01-01T00:00:00.000Z",
+    });
     await runner.runTask({
       candidate,
       runId: "run-1",
@@ -245,6 +251,7 @@ describe("TaskRunner.runTask", () => {
     const kinds = events.map((e) => e.kind);
     expect(kinds).toContain("run_started");
     expect(kinds).toContain("run_completed");
+    expect(events.filter((e) => e.kind === "run_completed").length).toBe(1);
     expect(kinds).not.toContain("run_failed");
 
     // Board transitioned to next status.
