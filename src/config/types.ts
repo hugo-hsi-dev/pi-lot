@@ -1,5 +1,5 @@
 /**
- * Configuration types for the Pi Lot Conductor.
+ * Configuration types for the Pi Lot Orchestrator.
  *
  * The config file describes:
  * - The single GitHub Project Board to poll.
@@ -14,24 +14,6 @@
  *
  * See PRD #1: Implementation Decisions.
  */
-
-/**
- * Legacy Pi Lot phase status keys.
- *
- * Retained as an exported type so non-config modules that still reference
- * the historical phase key set keep compiling while the workflow-driven
- * status registry is wired in by parallel work for Issue #24.
- */
-export type BoardStatusKey =
-  | "queued"
-  | "implementing"
-  | "reviewing"
-  | "finalizing"
-  | "readyForReview"
-  | "needsHuman";
-
-/** Legacy status map type. See {@link BoardStatusKey}. */
-export type BoardStatusMap = Record<BoardStatusKey, string>;
 
 export interface BoardConfig {
   /** GitHub owner (user or organization) that owns the Project. */

@@ -1,18 +1,17 @@
 import { loadConfig, ConfigError } from "./config/index.ts";
-import { Conductor } from "./conductor/index.ts";
+import { buildPiLotRuntime } from "./orchestrator/index.ts";
 import { parseArgs } from "./cli/args.ts";
 
 /**
  * Pi Lot entry point.
  *
- * Responsibilities at this scaffold stage:
- * 1. Parse CLI arguments (only `--config` is recognized).
+ * Responsibilities:
+ * 1. Parse CLI arguments (`--config` only).
  * 2. Load and validate the local config file.
- * 3. Start exactly one Conductor process, inheriting the worker
- *    environment unchanged.
+ * 3. Assemble the Orchestrator runtime and start the poll loop.
  *
- * Validation failures exit non-zero with an actionable message before
- * any GitHub, git, or Pi session work is attempted.
+ * The loop runs until the process receives SIGINT/SIGTERM, at which
+ * point it lets in-flight Runs settle and exits cleanly.
  */
 async function main(): Promise<number> {
   let configPath: string | undefined;
@@ -38,8 +37,20 @@ async function main(): Promise<number> {
     return 1;
   }
 
-  const conductor = new Conductor(config);
-  await conductor.start();
+  const { orchestrator } = await buildPiLotRuntime({ config });
+
+  const controller = new AbortController();
+  const onSignal = () => controller.abort();
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+
+  try {
+    await orchestrator.start({ signal: controller.signal });
+  } finally {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+    await orchestrator.idle();
+  }
   return 0;
 }
 
